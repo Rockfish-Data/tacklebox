@@ -5,7 +5,7 @@ description: Generate synthetic datasets from a schema specification using the R
 
 # Generate from schema
 
-Use `rockfish.actions.ent.GenerateFromDataSchema` to produce synthetic datasets from a schema specification.
+Use `rockfish.actions.GenerateFromDataSchema` to produce synthetic datasets from a schema specification.
 
 ## When to use this skill
 
@@ -21,7 +21,7 @@ If the user wants to inject *scenarios* (spikes, outages, ramps, shifts) into an
 
 ## Concept
 
-`rockfish.actions.ent.GenerateFromDataSchema` takes a `DataSchema` and produces one synthetic dataset per `Entity`. A schema is a tree:
+`rockfish.actions.GenerateFromDataSchema` takes a `DataSchema` and produces one synthetic dataset per `Entity`. A schema is a tree:
 
 ```
 DataSchema
