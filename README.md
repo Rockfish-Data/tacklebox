@@ -1,6 +1,6 @@
 # tacklebox
 
-A collection of [Claude Skills](https://claude.com/blog/lessons-from-building-claude-code-how-we-use-skills) for the [Rockfish SDK](https://packages.rockfish.ai) — a Python SDK for generating synthetic data.
+A collection of [Claude Skills](https://claude.com/skills) for the [Rockfish](https://www.rockfish.ai/) SDK — a Python SDK for generating synthetic data.
 
 ## Install
 
@@ -28,7 +28,7 @@ python examples/scenarios.py --help     # inject scenarios into a time-series da
 ## What's here
 
 - **`examples/`** — runnable Python scripts demonstrating Rockfish SDK features end-to-end. Each is a self-contained walkthrough.
-- **`skills/`** — [Claude Skills](https://claude.com/blog/lessons-from-building-claude-code-how-we-use-skills) for working with the Rockfish SDK. Each skill is a directory containing a `SKILL.md` that an agent (Claude Code, Claude Desktop, etc.) loads to understand when and how to use the underlying SDK feature. Skills point at the corresponding example scripts as worked references.
+- **`skills/`** — [Claude Skills](https://claude.com/skills) for working with the Rockfish SDK. Each skill is a directory containing a `SKILL.md` that an agent (Claude Code, Claude Desktop, etc.) loads to understand when and how to use the underlying SDK feature. Skills point at the corresponding example scripts as worked references.
 - **`output/`** — gitignored; example scripts write artifacts (plots, datasets) here.
 
 ## How skills work
@@ -50,3 +50,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). External pull requests are welcome.
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).
+
+## References
+
+- [Rockfish SDK package index](https://packages.rockfish.ai) — `pip` find-links source for `rockfish[labs]`.
+- [The Complete Guide to Building Skills for Claude](https://resources.anthropic.com/hubfs/The-Complete-Guide-to-Building-Skill-for-Claude.pdf) — Anthropic's official PDF guide.
+- [Lessons from building Claude Code: how we use skills](https://claude.com/blog/lessons-from-building-claude-code-how-we-use-skills) — Anthropic engineering blog on real-world skill design.
