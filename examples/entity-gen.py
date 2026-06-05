@@ -750,12 +750,12 @@ EXAMPLES = {
 
 
 async def main(example_numbers: list[int]) -> None:
-    conn = rf.Connection.from_config()
-    for n in example_numbers:
-        title, func = EXAMPLES[n]
-        banner = f" Example {n}: {title} "
-        print(f"\n{'=' * 72}\n{banner.center(72, '=')}\n{'=' * 72}\n")
-        await func(conn)
+    async with rf.Connection.from_config() as conn:
+        for n in example_numbers:
+            title, func = EXAMPLES[n]
+            banner = f" Example {n}: {title} "
+            print(f"\n{'=' * 72}\n{banner.center(72, '=')}\n{'=' * 72}\n")
+            await func(conn)
 
 
 def parse_args() -> argparse.Namespace:
