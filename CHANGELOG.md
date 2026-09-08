@@ -21,8 +21,14 @@ Use [`inject-incidents`](skills/inject-incidents/) instead. It does the same job
 | `{"type": "ramp", ...}` | `ValueRampIncidentConfig` |
 
 Field names change too: `measurement` → `impacted_measurement`, and the magnitude field
-is `absolute_magnitude` (spike, outage) or `delta_magnitude` (sustained change). Row
-filters move from ad-hoc keys to `impacted_metadata_predicate=[MetadataPredicate(col, value)]`.
+is `absolute_magnitude` (spike, outage), `delta_magnitude` (sustained change), or
+`start_magnitude` / `end_magnitude` (ramp — renamed from `start_value` / `end_value`).
+Row filters move from ad-hoc keys to
+`impacted_metadata_predicate=[MetadataPredicate(col, value)]`.
+
+Ramp takes at least one endpoint: both fields default to `None`, but omitting *both*
+raises `ValueError` from the constructor. Supply one and the other falls back to the
+dataset's own first or last value in the window.
 
 For the smallest possible diff, `rockfish.agentfuel.scenarios` stays closer to the old
 shape: `SpikeConfig` / `OutageConfig` / `ShiftConfig` / `RampConfig` all keep
