@@ -17,7 +17,7 @@ Use when the user wants synthetic tabular or time-series data with:
 - Cross-entity relationships — foreign keys, composite keys, count-driven fan-out, whales, hierarchies.
 - Realistic PII-like values (names, emails, addresses, SSNs, cards) that carry no real customer data.
 
-If the user wants to inject *scenarios* (spikes, outages, ramps, shifts) into an existing time-series dataset, use the `inject-scenarios` skill instead.
+If the user wants to inject *incidents* (spikes, outages, ramps, sustained shifts) into an existing time-series dataset, use the `inject-incidents` skill instead.
 
 ## Concept
 

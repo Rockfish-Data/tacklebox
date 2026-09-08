@@ -304,7 +304,7 @@ Tuning notes:
   caps at 100, a count floors at 0).
 - `seasonality_strength` and `noise_level` are fractions of the base value, not absolutes.
 - To inject a specific labelled anomaly (a known outage window, a ramp) rather than random
-  spikes, generate a clean baseline here and use the `inject-scenarios` skill.
+  spikes, generate a clean baseline here and use the `inject-incidents` skill.
 
 ---
 
@@ -567,4 +567,5 @@ which nothing else may depend on.
 sets, or use `NAMED_ENTITY_PROVIDER` when you want a large realistic pool instead of a list.
 
 **How do I add a labelled anomaly?** Generate a clean baseline here, then use the
-`inject-scenarios` skill to inject a spike, outage, ramp, or shift with known ground truth.
+`inject-incidents` skill to inject a spike, outage, ramp, or sustained shift with known
+ground truth.
