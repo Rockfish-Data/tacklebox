@@ -1,6 +1,6 @@
 ---
 name: inject-incidents
-description: Inject synthetic incidents (instantaneous spike, sustained magnitude change, data outage, value ramp) into a time-series dataset and evaluate analytics agents with `rockfish.agentfuel` — incident math and ground-truth generation run locally, no remote service. Covers the whole agentfuel toolkit; typed incident configs with boolean SQL test cases verified via DataFusion, Claude-backed natural-language prompts, variations, and answer grading, plus the pandas-based suite generators (analytics aggregation questions, scenario Q&A templates, stateful event/state analysis). Trigger on phrases like "inject an incident", "incident injection", "evaluate my analytics agent", "generate a test suite from my data", "ground-truth test cases from an anomaly", "event/state questions from an event log", "agentfuel", or mentions of `rockfish.agentfuel`. For the remote `rockfish.labs.scenarios` service, use the `inject-scenarios` skill instead.
+description: Inject synthetic incidents (instantaneous spike, sustained magnitude change, data outage, value ramp) into a time-series dataset and evaluate analytics agents with `rockfish.agentfuel` — incident math and ground-truth generation run locally, no remote service. Covers the whole agentfuel toolkit; typed incident configs with boolean SQL test cases verified via DataFusion, Claude-backed natural-language prompts, variations, and answer grading, plus the pandas-based suite generators (analytics aggregation questions, scenario Q&A templates, stateful event/state analysis). Trigger on phrases like "inject an incident", "incident injection", "inject an anomaly", "add a spike to this series", "simulate an outage", "scenario injection", "evaluate my analytics agent", "generate a test suite from my data", "ground-truth test cases from an anomaly", "event/state questions from an event log", "agentfuel", or mentions of `rockfish.agentfuel`.
 ---
 
 # Inject incidents
@@ -22,7 +22,7 @@ Use when the user has (or will create) a baseline time-series dataset and wants 
 - Generate **scenario Q&A** (detection, magnitude, duration, ...) from a pandas-level spike/outage/shift/ramp injection.
 - Generate **event/state questions** from an entity-structured event log (funnels, sequences, time-between-events, state machines).
 
-If the user doesn't yet have a baseline dataset, use the `generate-from-schema` skill first to produce one. If the user specifically wants the remote `rockfish.labs.scenarios` service (dict configs, server-side injection), use the `inject-scenarios` skill instead — `rockfish.agentfuel` is the local-first successor to that path.
+If the user doesn't yet have a baseline dataset, use the `generate-from-schema` skill first to produce one.
 
 ## Concept
 
@@ -152,4 +152,5 @@ Read these when you need detail beyond the tables above:
 - **Scenario negatives need a detection template and contrast**: negative (`coverage="none"`) cases exist only for scenario types with a boolean detection template (currently outages), and only when the config has an `Equals` filter on a column with more than one distinct value.
 - **Import paths off the beaten track**: `inject_scenario` lives in `rockfish.agentfuel.scenarios.injector`, and `discover_event_schema` / the stateful `generate_suite` live in `rockfish.agentfuel.stateful.schema` / `.suite_builder` — they are not re-exported from the subpackage roots.
 - **Naive timestamps are graded as UTC** across all suite generators; mixed naive/aware columns are forced onto the UTC timeline.
+- **Replaces the old `rockfish.labs.scenarios` service**: `rockfish.agentfuel` is the local-first successor to the remote `manta` scenarios path (dict configs, server-side injection). Port old code by swapping the dict `config=` payload for the matching typed `*IncidentConfig`, or — for the pandas-level equivalents — `rockfish.agentfuel.scenarios`.
 - **This skill targets rockfish 0.79.0+** — `rockfish.agentfuel` first shipped in 0.79.0. On an older SDK the imports fail immediately; the reference script reports the required version instead of a bare `ImportError`.

@@ -1,0 +1,37 @@
+# Changelog
+
+## 0.2.0 — breaking
+
+### Removed: `inject-scenarios`
+
+The `inject-scenarios` skill is gone. It documented `rockfish.labs.scenarios`, which
+called the remote `manta` service — and that module **no longer exists in the SDK** as of
+rockfish 0.79.0. Code written against it fails at import, not at runtime.
+
+Use [`inject-incidents`](skills/inject-incidents/) instead. It does the same job with
+`rockfish.agentfuel`, which runs the injection math locally, with no service.
+
+**Migrating.** Swap the dict `config=` payload for the matching typed config:
+
+| `rockfish.labs.scenarios` | `rockfish.agentfuel` |
+| --- | --- |
+| `{"type": "spike", ...}` | `InstantaneousSpikeIncidentConfig` |
+| `{"type": "outage", ...}` | `DataOutageIncidentConfig` |
+| `{"type": "shift", ...}` | `SustainedMagnitudeChangeIncidentConfig` |
+| `{"type": "ramp", ...}` | `ValueRampIncidentConfig` |
+
+Field names change too: `measurement` → `impacted_measurement`, and the magnitude field
+is `absolute_magnitude` (spike, outage) or `delta_magnitude` (sustained change). Row
+filters move from ad-hoc keys to `impacted_metadata_predicate=[MetadataPredicate(col, value)]`.
+
+For the smallest possible diff, `rockfish.agentfuel.scenarios` is closer to a drop-in:
+`SpikeConfig` / `OutageConfig` / `ShiftConfig` / `RampConfig` keep the old key names
+(`measurement`, `timestamp`, `magnitude`, `timestamp_column`), so an old dict config
+mostly becomes a constructor call. These work on a pandas DataFrame via
+`inject_scenario(df, config)` — no upload and no connection — rather than on an
+uploaded Rockfish dataset.
+
+Agents that routed to `inject-scenarios` by natural language ("inject an anomaly",
+"simulate an outage", "scenario injection") need no change — `inject-incidents` carries
+those trigger phrases. Only automation that names the skill `inject-scenarios`
+explicitly has to be repointed.
