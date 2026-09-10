@@ -6,20 +6,24 @@ they don't: running a workflow to completion, pulling the results back as
 DataFrames, and asserting that the generated data actually holds the guarantees
 the schema claims.
 
-Three examples, each ending in real checks:
+Four examples, each ending in real checks:
   1. Composite foreign key    -> referential integrity across a two-column key.
   2. Count-driven fan-out     -> child row counts, per-parent ordinals, and a
                                  parent total that matches its child rows.
   3. Timeseries expansion     -> the cardinality x ticks row-count contract and
                                  per-session structure.
+  4. OpenTelemetry span trees -> traces/metrics/logs from a call graph, and the
+                                 cross-signal reconciliation between them. Needs
+                                 rockfish >= 0.82.2; skips (not fails) on older.
 
-Requires rockfish >= 0.79.0 and credentials from either a config file at
-~/.config/rockfish/config.toml or the ROCKFISH_* environment variables.
+Requires rockfish >= 0.79.0 (>= 0.82.2 for example 4) and credentials from either
+a config file at ~/.config/rockfish/config.toml or the ROCKFISH_* environment
+variables.
 
 Exits non-zero if any check fails, so it works as a smoke test.
 
 Run:
-    python entity-gen.py                      # run all three
+    python entity-gen.py                      # run all four
     python entity-gen.py -e 2                 # run only example 2
     python entity-gen.py -e 1 -e 3            # run examples 1 and 3
     python entity-gen.py --connection env     # force ROCKFISH_* env vars
@@ -548,10 +552,227 @@ async def example_3_timeseries(conn: rf.Connection) -> None:
         )
 
 
+async def example_4_otel_call_graph(conn: rf.Connection) -> None:
+    """OpenTelemetry span trees: traces, RED metrics, and logs from a call graph.
+
+    A `trace` driver entity feeds a `span_tree` generator that walks a service
+    call graph; `span_metrics` and `span_logs` read the resulting spans, so all
+    three signals reconcile by construction. A planted SpanIncident degrades
+    `payment`, and a `span_event` child fans out on each span's `event_count`.
+
+    Needs rockfish >= 0.82.2 for the span-tree classes; on an older SDK this one
+    example prints a SKIP (not a failure) and examples 1-3 still run.
+    """
+    try:
+        from rockfish.actions.ent import (
+            ArrivalPattern,
+            CallGraph,
+            SequentialIntParams,
+            SpanCall,
+            SpanConsumer,
+            SpanContent,
+            SpanIncident,
+            SpanLogsParams,
+            SpanMetricsParams,
+            SpanService,
+            SpanTreeParams,
+        )
+    except ImportError as exc:
+        import importlib.metadata as _md
+
+        try:
+            have = _md.version("rockfish")
+        except _md.PackageNotFoundError:
+            have = "not installed"
+        print(
+            f"  [SKIP] OpenTelemetry span trees need rockfish >= 0.82.2 "
+            f"(found: {have}): {exc}"
+        )
+        return
+
+    def placeholder(name: str, int_cols) -> Column:
+        """A generator-owned output column; the declared domain is never run."""
+        if name in int_cols:
+            return Column(
+                name=name, data_type="int64",
+                column_type=ColumnType.INDEPENDENT,
+                column_category_type=ColumnCategoryType.METADATA,
+                domain=Domain(type=DomainType.SEQUENTIAL_INT, params=SequentialIntParams()),
+            )
+        return Column(
+            name=name, data_type="string",
+            column_type=ColumnType.INDEPENDENT,
+            column_category_type=ColumnCategoryType.METADATA,
+            domain=Domain(type=DomainType.ID, params=IDParams(template_str="x-{id}")),
+        )
+
+    # A one-hour window in epoch nanoseconds, with a ten-minute payment incident.
+    window_start, window_end = 1_700_000_000_000_000_000, 1_700_003_600_000_000_000
+    inc_start, inc_end = 1_700_001_800_000_000_000, 1_700_002_400_000_000_000
+
+    call_graph = CallGraph(
+        entry="frontend",
+        services=[
+            SpanService("frontend", 2.2, 0.5, error_rate=0.002),
+            SpanService("checkout", 2.6, 0.6, error_rate=0.004),
+            SpanService("payment", 2.0, 0.6, error_rate=0.02),
+            SpanService("cart", 1.5, 0.5),
+            SpanService("valkey", 0.3, 0.4),
+            SpanService("postgresql", 1.2, 0.6),
+            SpanService("accounting", 1.6, 0.5),
+        ],
+        calls=[
+            SpanCall("frontend", "checkout", "server", 0.5, protocol="grpc"),
+            SpanCall("frontend", "cart", "server", 0.9, protocol="grpc"),
+            SpanCall("cart", "valkey", "cache", 1.0),
+            SpanCall("checkout", "payment", "server", 1.0, protocol="grpc"),
+            SpanCall("checkout", "orders", "queue", 1.0),
+            SpanCall("payment", "postgresql", "db", 1.0),
+        ],
+        consumers=[SpanConsumer("accounting", "orders")],
+        namespace="shop", k8s_namespace="shop",
+        content=SpanContent(
+            root_routes=["/", "/cart", "/checkout", "/api/products/{id}"],
+            datastore_tables=["orders", "items", "carts", "payments"],
+            rpc_namespace="shop",
+        ),
+    )
+
+    trace = Entity(
+        name="trace", cardinality=5_000,
+        columns=[
+            Column(
+                name="trace_id", data_type="string",
+                column_type=ColumnType.INDEPENDENT,
+                column_category_type=ColumnCategoryType.METADATA,
+                domain=Domain(type=DomainType.UNIQUE,
+                              params=UniqueParams(format="hex", hex_width=32)),
+            )
+        ],
+    )
+    span = Entity(
+        name="span", cardinality=1,   # ignored; row count is driven by `trace`
+        columns=[placeholder(c, SpanTreeParams.INT_OUTPUT_COLUMNS)
+                 for c in SpanTreeParams.OUTPUT_COLUMNS],
+        span_tree=SpanTreeParams(
+            trace_entity="trace", call_graph=call_graph,
+            window_start_unix_nano=window_start, window_end_unix_nano=window_end,
+            arrival=ArrivalPattern(shape="wave", amplitude=0.25, cycles=2,
+                                   burstiness=0.20, autocorrelation=0.6),
+            incidents=[SpanIncident("payment", inc_start, inc_end,
+                                    latency_mult=7.0, error_rate=0.6)],
+            seed=42,
+        ),
+    )
+    span_metric = Entity(
+        name="span_metric", cardinality=1,
+        columns=[placeholder(c, SpanMetricsParams.INT_OUTPUT_COLUMNS)
+                 for c in SpanMetricsParams.OUTPUT_COLUMNS],
+        span_metrics=SpanMetricsParams(span_entity="span", bucket_seconds=30),
+    )
+    log_record = Entity(
+        name="log_record", cardinality=1,
+        columns=[placeholder(c, SpanLogsParams.INT_OUTPUT_COLUMNS)
+                 for c in SpanLogsParams.OUTPUT_COLUMNS],
+        span_logs=SpanLogsParams(span_entity="span"),
+    )
+    # Ordinary child entity: one exception event per failed span, fanned out on
+    # the span's generator-produced `event_count` column.
+    span_event = Entity(
+        name="span_event", cardinality=1,
+        columns=[
+            placeholder("event_id", set()),
+            Column(name="span_id", data_type="string",
+                   column_type=ColumnType.FOREIGN_KEY,
+                   column_category_type=ColumnCategoryType.METADATA),
+            Column(name="time_unix_nano", data_type="int64",
+                   column_type=ColumnType.FOREIGN_KEY,
+                   column_category_type=ColumnCategoryType.METADATA),
+            Column(name="exception_type", data_type="string",
+                   column_type=ColumnType.INDEPENDENT,
+                   column_category_type=ColumnCategoryType.METADATA,
+                   domain=Domain(type=DomainType.CATEGORICAL,
+                                 params=CategoricalParams(
+                                     values=["TimeoutException", "SQLException",
+                                             "NullPointerException"]))),
+        ],
+    )
+    event_rel = EntityRelationship(
+        parent_entity="span", child_entity="span_event",
+        relationship_type=EntityRelationshipType.ONE_TO_MANY,
+        join_columns={"span_id": "span_id"},
+        child_count_column="event_count",
+        inherit_columns={"end_time_unix_nano": "time_unix_nano"},
+    )
+
+    schema = DataSchema(
+        entities=[trace, span, span_metric, log_record, span_event],
+        entity_relationships=[event_rel],
+        seed=42,
+    )
+
+    frames = await run(conn, schema)
+
+    # All five entities came back.
+    check("all five entities generated",
+          set(frames) == {"trace", "span", "span_metric", "log_record", "span_event"},
+          ", ".join(sorted(frames)))
+    spans = frames["span"]
+    print(spans[["service_name", "span_kind", "status_code"]].head())
+
+    # The span entity carries exactly the generator's output columns.
+    check("span declares the generator's output columns",
+          set(spans.columns) == set(SpanTreeParams.OUTPUT_COLUMNS))
+
+    # Fan-out: many spans per trace.
+    check("spans fan out beyond traces",
+          len(spans) > len(frames["trace"]),
+          f"{len(spans):,} spans from {len(frames['trace']):,} traces")
+
+    # Exactly one root span (null parent) per distinct trace id -- request traces
+    # and async-consumer traces alike each get one root.
+    roots = spans["parent_span_id"].isna().sum()
+    check("one root span per trace",
+          roots == spans["trace_id"].nunique(),
+          f"{roots:,} roots vs {spans['trace_id'].nunique():,} trace ids")
+
+    # RED metrics reconcile: total calls == number of inbound (SERVER/CONSUMER) spans.
+    inbound = spans["span_kind"].isin(["SERVER", "CONSUMER"]).sum()
+    total_calls = int(frames["span_metric"]["calls"].sum())
+    check("metric calls reconcile with inbound spans",
+          total_calls == inbound,
+          f"{total_calls:,} calls vs {inbound:,} inbound spans")
+
+    # Logs reconcile: one ERROR log per failed span.
+    err_logs = (frames["log_record"]["severity_text"] == "ERROR").sum()
+    err_spans = (spans["status_code"] == "ERROR").sum()
+    check("ERROR logs reconcile with error spans",
+          err_logs == err_spans,
+          f"{err_logs:,} error logs vs {err_spans:,} error spans")
+
+    # The fan-out child count matches the spans' event_count.
+    check("exception events match event_count",
+          len(frames["span_event"]) == int(spans["event_count"].sum()),
+          f"{len(frames['span_event']):,} events vs {int(spans['event_count'].sum()):,}")
+
+    # The planted incident is visible: payment errors during the window exceed baseline.
+    m = frames["span_metric"]
+    pay = m[m["service_name"] == "payment"].copy()
+    pay["rate"] = pay["errors"] / pay["calls"].clip(lower=1)
+    in_win = pay[(pay["time_unix_nano"] >= inc_start) & (pay["time_unix_nano"] < inc_end)]
+    out_win = pay[(pay["time_unix_nano"] < inc_start) | (pay["time_unix_nano"] >= inc_end)]
+    if len(in_win) and len(out_win):
+        check("payment incident raises error rate in-window",
+              in_win["rate"].max() > out_win["rate"].median(),
+              f"in-window max {in_win['rate'].max():.2f} vs baseline "
+              f"median {out_win['rate'].median():.2f}")
+
+
 EXAMPLES = {
     1: ("Composite foreign key and referential integrity", example_1_composite_fk),
     2: ("Count-driven fan-out, ordinals, and roll-up", example_2_fanout),
     3: ("Timeseries expansion and row-count contract", example_3_timeseries),
+    4: ("OpenTelemetry span trees from a call graph", example_4_otel_call_graph),
 }
 
 
@@ -592,7 +813,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         action="append",
         choices=sorted(EXAMPLES),
-        help="Run a specific example (1-3). Repeatable. Default: run all three.",
+        help="Run a specific example (1-4). Repeatable. Default: run all four.",
     )
     parser.add_argument(
         "--connection",

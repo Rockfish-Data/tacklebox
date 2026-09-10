@@ -543,6 +543,126 @@ Output: `transport_link` 1,158 rows, `core_node` 3,088 rows, `cell_site` 19,300 
 
 ---
 
+## Walkthrough: OpenTelemetry from a call graph
+
+Generate a correlated OpenTelemetry signal set (traces + RED metrics + logs) from a service
+call graph. Needs **rockfish ≥ 0.82.2**. Field reference:
+[`schema-reference.md`](schema-reference.md#opentelemetry-span-trees).
+
+The pattern is a driver `trace` entity plus three generator entities that all trace back to
+the same spans, so the signals reconcile by construction. Each generator entity declares
+exactly its generator's `OUTPUT_COLUMNS` as placeholder metadata columns:
+
+```python
+from rockfish.actions.ent import (
+    ArrivalPattern, CallGraph, Column, ColumnCategoryType, ColumnType, DataSchema,
+    Domain, DomainType, Entity, EntityRelationship, EntityRelationshipType, IDParams,
+    SequentialIntParams, SpanCall, SpanConsumer, SpanContent, SpanIncident, SpanLogsParams,
+    SpanMetricsParams, SpanService, SpanTreeParams, UniqueParams,
+)
+
+def placeholder(name: str, int_cols) -> Column:
+    """A generator-owned output column: int64 for numeric fields, else a string id.
+    The generator fills every value; the domain here is a never-executed placeholder."""
+    if name in int_cols:
+        dom = Domain(type=DomainType.SEQUENTIAL_INT, params=SequentialIntParams())
+        dtype = "int64"
+    else:
+        dom = Domain(type=DomainType.ID, params=IDParams(template_str="x-{id}"))
+        dtype = "string"
+    return Column(name=name, data_type=dtype, column_type=ColumnType.INDEPENDENT,
+                  column_category_type=ColumnCategoryType.METADATA, domain=dom)
+```
+
+The call graph — services with latency/error profiles, the edges between them, an async
+consumer, and the request vocabulary:
+
+```python
+call_graph = CallGraph(
+    entry="frontend",
+    services=[
+        SpanService("frontend", 2.2, 0.5, error_rate=0.002),
+        SpanService("checkout", 2.6, 0.6, error_rate=0.004),
+        SpanService("payment", 2.0, 0.6, error_rate=0.02),
+        SpanService("cart", 1.5, 0.5),
+        SpanService("valkey", 0.3, 0.4),          # cache datastore
+        SpanService("postgresql", 1.2, 0.6),      # db datastore
+        SpanService("accounting", 1.6, 0.5),      # async consumer
+    ],
+    calls=[
+        SpanCall("frontend", "checkout", "server", 0.5, protocol="grpc"),
+        SpanCall("frontend", "cart", "server", 0.9, protocol="grpc"),
+        SpanCall("cart", "valkey", "cache", 1.0),
+        SpanCall("checkout", "payment", "server", 1.0, protocol="grpc"),
+        SpanCall("checkout", "orders", "queue", 1.0),      # publishes to topic "orders"
+        SpanCall("payment", "postgresql", "db", 1.0),
+    ],
+    consumers=[SpanConsumer("accounting", "orders")],      # consumes topic "orders"
+    namespace="shop", k8s_namespace="shop",
+    content=SpanContent(
+        root_routes=["/", "/cart", "/checkout", "/api/products/{id}"],
+        datastore_tables=["orders", "items", "carts", "payments"],
+        rpc_namespace="shop",
+    ),
+)
+```
+
+The four entities. `trace` is an ordinary entity (one row per request); `span` walks the
+graph; `span_metric` and `span_logs` read the span table. A planted `SpanIncident` degrades
+`payment` for ten minutes, and an `ArrivalPattern` shapes request arrivals:
+
+```python
+WINDOW_START, WINDOW_END = 1_700_000_000_000_000_000, 1_700_003_600_000_000_000  # 1h in ns
+INC_START, INC_END = 1_700_001_800_000_000_000, 1_700_002_400_000_000_000        # 10 min
+
+trace = Entity(
+    name="trace", cardinality=80_000,
+    columns=[Column(name="trace_id", data_type="string", column_type=ColumnType.INDEPENDENT,
+                    column_category_type=ColumnCategoryType.METADATA,
+                    domain=Domain(type=DomainType.UNIQUE,
+                                  params=UniqueParams(format="hex", hex_width=32)))],
+)
+
+span_ints = SpanTreeParams.INT_OUTPUT_COLUMNS
+span = Entity(
+    name="span", cardinality=1,                            # ignored; driven by `trace`
+    columns=[placeholder(c, span_ints) for c in SpanTreeParams.OUTPUT_COLUMNS],
+    span_tree=SpanTreeParams(
+        trace_entity="trace", call_graph=call_graph,
+        window_start_unix_nano=WINDOW_START, window_end_unix_nano=WINDOW_END,
+        arrival=ArrivalPattern(shape="wave", amplitude=0.25, cycles=2,
+                               burstiness=0.20, autocorrelation=0.6),
+        incidents=[SpanIncident("payment", INC_START, INC_END,
+                                latency_mult=7.0, error_rate=0.6)],
+    ),
+)
+
+metric_ints = SpanMetricsParams.INT_OUTPUT_COLUMNS
+span_metric = Entity(
+    name="span_metric", cardinality=1,
+    columns=[placeholder(c, metric_ints) for c in SpanMetricsParams.OUTPUT_COLUMNS],
+    span_metrics=SpanMetricsParams(span_entity="span", bucket_seconds=30),
+)
+
+log_ints = SpanLogsParams.INT_OUTPUT_COLUMNS
+log_record = Entity(
+    name="log_record", cardinality=1,
+    columns=[placeholder(c, log_ints) for c in SpanLogsParams.OUTPUT_COLUMNS],
+    span_logs=SpanLogsParams(span_entity="span"),
+)
+
+schema = DataSchema(entities=[trace, span, span_metric, log_record], seed=42)
+```
+
+Assemble and run exactly as any other schema (`GenerateFromDataSchema` → `WorkflowBuilder`
+→ `workflow.datasets()`). The incident shows up as a matching error/latency spike on
+`payment` in `span_metric`, a burst of ERROR rows in `log_record`, and failed span chains in
+`span`, all in the same window. To attach exception events, add an ordinary child entity
+joined to `span` via a `ONE_TO_MANY` relationship that fans out on the span's `event_count`
+column (`child_count_column="event_count"`).
+
+---
+
 ## FAQ
 
 **When is a column `INDEPENDENT` vs `STATEFUL`?** Independent if the value does not change

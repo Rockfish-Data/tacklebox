@@ -7,7 +7,9 @@
 
 Rockfish supports two operational data models. Choosing the right one is the first schema
 decision, because it determines every column's `column_category_type` and whether the
-entity needs a `Timestamp`.
+entity needs a `Timestamp`. A third, specialized shape — [span trees](#span-trees-distributed-traces)
+for OpenTelemetry telemetry — is produced by a dedicated generator rather than the column
+pipeline; reach for it only when generating distributed traces.
 
 ## Time-series
 
@@ -98,6 +100,38 @@ tabular, since there are no distinct sessions to learn from.
 - **A mixed schema is normal.** Reference/dimension entities (a device catalog, a customer
   list) are tabular; fact/event entities (readings, sessions, transactions) are time-series,
   and they link through `entity_relationships`.
+
+## Span trees (distributed traces)
+
+A specialized model for **OpenTelemetry telemetry**, produced by a dedicated generator
+instead of the column pipeline. You describe a service **call graph** once and Rockfish
+emits a correlated signal set — distributed-trace spans, per-service RED metrics, and logs
+— reconciled by construction because the metrics and logs are aggregated/derived from the
+same spans. Needs **rockfish ≥ 0.82.2**. Full field reference in
+[`schema-reference.md`](schema-reference.md#opentelemetry-span-trees); a complete worked
+schema in [`patterns.md`](patterns.md#walkthrough-opentelemetry-from-a-call-graph).
+
+The shape is a small set of linked entities:
+
+| Entity | Role | How it's generated |
+| --- | --- | --- |
+| `trace` (driver) | one row per request, keyed by a trace id | ordinary column pipeline (`cardinality` = number of requests) |
+| `span` | the distributed-trace spans | `span_tree=SpanTreeParams(trace_entity="trace", call_graph=...)` |
+| `span_metric` | per-service RED metrics in time buckets | `span_metrics=SpanMetricsParams(span_entity="span")` |
+| `log_record` | INFO/ERROR logs correlated by trace/span id | `span_logs=SpanLogsParams(span_entity="span")` |
+
+Unlike the two core models, a span-generator entity does **not** author its own columns:
+it must declare exactly the generator's fixed `OUTPUT_COLUMNS` (all `METADATA`), and its
+`cardinality` is ignored. Row counts come from the driver, not `cardinality`:
+
+- **`span` rows ≈ trace rows × mean spans per trace.** One tree per `trace` row, and a
+  request that touches N services yields on the order of 2N+ spans. Set `cardinality=1`.
+- **`span_metric` rows ≈ services × time buckets** (`bucket_seconds`-wide over the window).
+- **`log_record` rows ≈ inbound spans + failed spans.**
+
+A planted `SpanIncident` (a time-bounded latency/error degradation of one service) is the
+distributed-trace analog of a timeseries spike — it appears consistently across all three
+signals, which is what makes the dataset useful for demos, alert tuning, and training.
 
 ## Sample real datasets
 
